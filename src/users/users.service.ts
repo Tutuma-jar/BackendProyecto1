@@ -132,7 +132,7 @@ export class UsersService implements OnModuleInit {
     }
     user.passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
     user.passwordChangedAt = new Date();
-    return user;
+    return user.save();
   }
 
   async resetPassword(id: string, newPassword: string): Promise<void> {

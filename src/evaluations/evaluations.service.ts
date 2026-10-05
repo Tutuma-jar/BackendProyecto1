@@ -46,7 +46,11 @@ export class EvaluationsService {
 
   async update(id: string, dto: UpdateEvaluationDto, user: AuthUser): Promise<EvaluationDocument> {
     const evaluation = await this.findOne(id);
-    await this.groupsService.assertCanManage(String(evaluation.group), user);
+    const group = await this.groupsService.assertCanManage(String(evaluation.group), user);
+    const period = await this.periodsService.findOne(String(group.period));
+    if (period.status === PeriodStatus.Closed) {
+      throw new BadRequestException('El periodo esta cerrado: no se puede modificar el plan de evaluacion');
+    }
 
     if (dto.weight !== undefined && dto.weight !== evaluation.weight) {
       if (await this.gradeModel.exists({ evaluation: evaluation._id })) {
