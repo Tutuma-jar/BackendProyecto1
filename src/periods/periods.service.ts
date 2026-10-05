@@ -66,6 +66,9 @@ export class PeriodsService {
       if (dto.status === PeriodStatus.Closed) {
         throw new BadRequestException('Para cerrar un periodo usa POST /periods/:id/close');
       }
+      if (period.status !== PeriodStatus.Planned || dto.status !== PeriodStatus.Open) {
+        throw new BadRequestException('Solo se permite cambiar de planificado a abierto');
+      }
     }
 
     // Solo puede haber un periodo abierto a la vez
