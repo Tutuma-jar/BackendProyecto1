@@ -68,6 +68,10 @@ export class EnrollmentsService {
     await this.assertCreditLimit(student.id, group, subject);
 
     const created = await this.reserveSeat(student.id, group, subject, cancelled);
+    // Verifica que la matricula haya quedado confirmada
+    if (created.status !== EnrollmentStatus.Active) {
+      throw new BadRequestException('No se pudo confirmar la matricula');
+    }
     await this.notificationsService.notify(
       student.user,
       NotificationType.EnrollmentConfirmed,
@@ -75,10 +79,6 @@ export class EnrollmentsService {
       `Quedaste matriculado en ${subject.name} (grupo ${group.number}).`,
       { model: 'Enrollment', id: created._id },
     );
-    // Verifica que la matricula haya quedado confirmada
-    if (created.status === EnrollmentStatus.Active) {
-      throw new BadRequestException('No se pudo confirmar la matricula');
-    }
     return created;
   }
 
@@ -95,8 +95,19 @@ export class EnrollmentsService {
     const session = await this.connection.startSession();
     try {
       await session.withTransaction(async () => {
-        enrollment.status = EnrollmentStatus.Cancelled;
-        await enrollment.save({ session });
+        const cancelled = await this.model.findOneAndUpdate(
+          { _id: enrollment._id, status: EnrollmentStatus.Active },
+          { $set: { status: EnrollmentStatus.Cancelled } },
+          { session },
+        );
+        if (!cancelled) throw new BadRequestException('Solo se pueden cancelar matriculas activas');
+
+        const released = await this.groupModel.findOneAndUpdate(
+          { _id: enrollment.group, enrolled: { $gt: 0 } },
+          { $inc: { enrolled: -1 } },
+          { session },
+        );
+        if (!released) throw new ConflictException('No se pudo liberar el cupo del grupo');
       });
     } finally {
       await session.endSession();

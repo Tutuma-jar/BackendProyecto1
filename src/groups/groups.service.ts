@@ -123,11 +123,11 @@ export class GroupsService {
     const teacherId = dto.teacher ?? String(group.teacher);
     const schedule = dto.schedule ?? (group.schedule as unknown as ScheduleSlotDto[]);
     const newTeacher = dto.teacher && dto.teacher !== String(group.teacher) ? await this.assertTeacherActive(dto.teacher) : null;
-    if (dto.schedule) {
+    if (dto.schedule !== undefined) {
       this.assertValidSchedule(dto.schedule);
       await this.classroomsService.assertActive(dto.schedule.map((s) => s.classroom));
     }
-    if (dto.teacher || dto.schedule) {
+    if (dto.teacher || dto.schedule !== undefined || (dto.active === true && !group.active)) {
       await this.assertNoConflicts(String(group.period), teacherId, schedule, id);
     }
 
@@ -162,6 +162,9 @@ export class GroupsService {
 
   // Cada franja debe terminar despues de iniciar y no solaparse con otra del mismo grupo
   private assertValidSchedule(schedule: ScheduleSlotDto[]): void {
+    if (!Array.isArray(schedule) || schedule.length === 0) {
+      throw new BadRequestException('El horario debe ser un arreglo no vacio');
+    }
     schedule.forEach((s) => {
       if (s.endTime <= s.startTime) {
         throw new BadRequestException(`La franja del ${s.day} debe terminar despues de iniciar`);

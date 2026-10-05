@@ -3,6 +3,337 @@
 ## Summary
 
 Area: backend
+Total detected: 10
+Confirmed: 10
+Probable: 0
+
+Scope: ampliación solicitada, exclusivamente backend, sobre revisión `d8f4f5b1e51df6a6b6a539a1b3c77c50910302e8` y árbol de trabajo local. Inspección principal de `src/enrollments`, `src/grades`, `src/periods`, `src/groups`, `src/auth`, `src/users`, `src/deletions` y sus DTOs, pipes y contratos de modelos directamente necesarios. Lecturas auxiliares de servicios académicos, reportes, materias y estudiantes; no se afirma cobertura completa de esos módulos. IDs nuevos BE-014 a BE-023; las 13 entradas anteriores se preservan al final y no se cuentan como detecciones actuales.
+
+Checks:
+- Cwd: `C:\PrimerParcial\BackendProyecto1` para todos los comandos.
+- `git rev-parse --is-inside-work-tree`: salida 0, `true`; `git rev-parse --show-toplevel`: salida 0, raíz backend; `git rev-parse HEAD`: salida 0, revisión indicada.
+- `node node_modules/typescript/bin/tsc --noEmit --incremental false -p tsconfig.json`: salida 0, sin errores ni emisión de archivos.
+- `node -r ts-node/register`, con diagnóstico JavaScript inline enviado por stdin mediante here-string de PowerShell: salida 0. Se importaron clases reales de servicios/DTOs/guards/pipe, se usaron `assert`, ValidationPipe con las opciones de `src/main.ts`, modelos y transacciones simulados, fechas sintéticas y un documento Mongoose desconectado. No se importó AppModule ni se inició la aplicación. Diez reproducciones exitosas, con resultados detallados en cada entrada.
+- Salida final del diagnóstico: `TOTAL: 10 independent new causes confirmed offline. No connection, bootstrap or project file writes.` Las llamadas a save/create/delete/update de negocio fueron mocks; la única validación Mongoose real fue `document.validate()` offline.
+- Build omitido porque emite `dist`; lint omitido porque el script incluye `--fix`; suite Jest omitida por falta de configuración/seguridad verificada y presencia de tests en edición. No se ejecutaron instalación, seeds, importaciones, migraciones, servidores ni consultas DB.
+
+Limitations:
+- No existe `AI_CONTEXT.md`; se usaron manifiesto y tsconfig raíz para ubicar y validar el área. No se creó contexto.
+- Confirmación por ejecución aislada y evidencia estática, no por solicitudes contra una instancia real ni persistencia real. No se demuestra comportamiento integral ni concurrencia MongoDB.
+- Se excluyeron las causas ya mencionadas en BE-001 a BE-013. En particular, BE-021 verifica una contraseña cuyo timestamp **ya está persistido**, y no depende de la falta de save de BE-004. BE-018 trata metadata de roles incorrecta, no la ausencia de RolesGuard de BE-001.
+- Entradas y notas anteriores preservadas sin revalidar; sus estados históricos no describen necesariamente el árbol local actual.
+- Estado inicial: `.env.example` eliminado, `.gitignore`, `src/auth/auth.module.ts` y `src/groups/groups.service.ts` modificados; `.env copy.example`, `src/auth/auth.module.spec.ts` y `src/groups/groups.service.spec.ts` no rastreados. No se modificaron ni se leyeron secretos.
+- Al revisar el estado después del diagnóstico apareció además `src/auth/auth-jwt.spec.ts` no rastreado. Ningún diagnóstico de esta ejecución crea ese archivo; se preservó como trabajo externo/concurrente, sin ejecutar ni modificarlo.
+- En la comprobación final aparecieron además modificaciones externas en `src/evaluations/evaluations.controller.ts` y `src/users/users.service.ts`, y archivos no rastreados `src/evaluations/evaluations.controller.spec.ts` y `src/users/users-password.spec.ts`. Se preservaron sin revalidar; la evidencia y numeración de líneas corresponden al momento de las lecturas/reproducciones, no a un snapshot inmutable del árbol final.
+- La única escritura efectuada por este análisis es este reporte.
+
+## Recommended Order
+
+1. BE-023 — Evitar el bypass de las protecciones de la cuenta propia.
+2. BE-021 — Hacer efectiva la revocación de sesiones tras cambiar/restablecer contraseña.
+3. BE-015 — Restablecer la integridad del contador de cupos al cancelar.
+4. BE-022 — Impedir horarios nulos que rompen validaciones de conflictos.
+5. BE-020 — Validar conflictos al reactivar grupos; independiente de BE-022, pero probar después de asegurar horarios válidos.
+6. BE-019 — Mantener el ciclo de vida del periodo.
+7. BE-014 — Devolver éxito cuando la matrícula quedó activa, conservando reservas y notificaciones correctas.
+8. BE-016 — Clasificar correctamente la nota mínima aprobatoria.
+9. BE-017 — Permitir toda la escala de calificaciones publicada.
+10. BE-018 — Recuperar el acceso del estudiante a sus matrículas.
+
+## Bugs
+
+### BE-014
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+POST `/api/v1/enrollments` con estudiante y grupo activos, periodo abierto y reglas cumplidas devuelve 400 `No se pudo confirmar la matricula` aunque ya reservó el cupo, creó/reactivó una matrícula activa y envió su confirmación. Un reintento encuentra la matrícula existente o consume una experiencia de error tras una operación exitosa.
+
+Root cause:
+`EnrollmentsService.enroll()` lanza BadRequestException cuando `created.status === EnrollmentStatus.Active`: la condición de confirmación está invertida. `reserveSeat()` precisamente crea o reactiva con estado Active.
+
+Evidence:
+- `src/enrollments/enrollments.service.ts:70-82`: reserva, notificación y rechazo del estado exitoso.
+- `src/enrollments/enrollments.service.ts:245-255`: ambas ramas producen estado Active.
+- Diagnóstico inline: método real con estudiante activo, materia de 3 créditos sin prerrequisitos, sin cruces y periodo Open. Resultado: 400; mocks registraron reserva=1, inserción=1, notificación=1 antes del error.
+
+Files involved:
+- `src/enrollments/enrollments.service.ts`
+- `src/enrollments/enrollments.controller.ts`
+
+Suggested fix:
+No rechazar el estado Active; comprobar que el resultado sea el esperado antes de anunciar éxito y devolver la matrícula confirmada. No repetir la reserva para compensar este error de respuesta.
+
+Validation after fix:
+Prueba aislada del método con `node -r ts-node/register`, cwd indicado, mocks de transacción/modelos/notificaciones: creación y reactivación válidas resuelven con estado Active y una sola reserva/notificación; falta de cupos o incumplimiento de reglas rechaza sin confirmar. En una prueba HTTP con servicios simulados, POST exitoso debe responder 201.
+
+### BE-015
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+Cancelar una matrícula cambia su estado a Cancelled pero no libera cupo. Un grupo de capacidad 1 con enrolled=1 sigue apareciendo lleno y rechaza otro estudiante, aunque su única matrícula esté cancelada. Reactivar la matrícula intenta sumar otra vez al contador anterior.
+
+Root cause:
+`EnrollmentsService.cancel()` solo guarda el estado de la matrícula dentro de la transacción; nunca decrementa `Group.enrolled`. `reserveSeat()` y el filtro de disponibilidad dependen de ese contador, no de contar matrículas vigentes.
+
+Evidence:
+- `src/enrollments/enrollments.service.ts:95-103`: transacción de cancelación sin actualización del grupo.
+- `src/enrollments/enrollments.service.ts:238-243`: disponibilidad basada en enrolled y aumento de 1 por reserva.
+- `src/enrollments/enrollments.controller.ts:47`: contrato explícito «libera el cupo».
+- Diagnóstico inline: matrícula Active en periodo Open; cancel resuelve, status=Cancelled, save=1 y actualizaciones del modelo Group=0.
+
+Files involved:
+- `src/enrollments/enrollments.service.ts`
+- `src/groups/groups.service.ts` (lector de disponibilidad)
+
+Suggested fix:
+Liberar exactamente un cupo del grupo en la misma transacción que cambia Active a Cancelled, sin permitir contadores negativos ni doble decremento. Evaluar por separado una reparación segura de contadores históricos; no ejecutarla como parte del análisis.
+
+Validation after fix:
+Prueba aislada con `node -r ts-node/register`: cancelar Active disminuye enrolled en 1 y guarda ambos cambios con la misma sesión; segunda cancelación rechaza sin decremento; fallo de transacción no confirma cancelación. Caso capacidad=1: tras cancelar debe ser posible reservar nuevamente.
+
+### BE-016
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+Finalizar una matrícula con nota ponderada exactamente 3.00 la guarda como reprobada. Afecta historial, créditos aprobados, prerrequisitos y reportes, aunque el servicio declara 3.0 como nota mínima para aprobar.
+
+Root cause:
+`GradesService.finalize()` usa `finalGrade > PASSING_GRADE` en lugar de incluir el umbral mínimo con `>=`.
+
+Evidence:
+- `src/grades/grades.service.ts:16-17`: mínimo aprobado declarado como 3.0.
+- `src/grades/grades.service.ts:130-133`: clasificación estrictamente superior al mínimo y persistencia.
+- Diagnóstico inline: evaluación de peso 100 con nota 3; método real retornó finalGrade=3 y status=`reprobada`, con save=1.
+
+Files involved:
+- `src/grades/grades.service.ts`
+
+Suggested fix:
+Incluir el mínimo aprobado en la comparación, preservando el redondeo definido y las validaciones del plan/notas pendientes.
+
+Validation after fix:
+Prueba aislada de finalize con `node -r ts-node/register` y modelos simulados: finales 2.99 → Failed, 3.00 → Passed, 3.01 → Passed. Comprobar resultado, documento guardado y notificación; finalizeGroup debe reflejar la misma clasificación al delegar.
+
+### BE-017
+
+Severity: medium
+
+Status: confirmed
+
+Symptom:
+Registrar notas 4.6 a 5.0 por las rutas de calificación individual o masiva devuelve 400, aunque la API publica una escala máxima de 5.0 y el modelo la admite.
+
+Root cause:
+`UpsertGradeDto.value` está decorado con `@Max(4.5)`; contradice Swagger y el contrato de Grade. BulkGradesDto reutiliza ese DTO para cada ítem.
+
+Evidence:
+- `src/grades/dto/grade.dto.ts:15-19`: Swagger maximum=5 frente a Max(4.5).
+- `src/grades/dto/grade.dto.ts:23-29`: validación anidada para carga masiva.
+- `src/grades/schemas/grade.schema.ts:8,17-18`: escala 0.0–5.0 y max=5.
+- Diagnóstico con ValidationPipe real y opciones de main.ts: 4.5 pasa, 4.6 y 5 reciben 400.
+
+Files involved:
+- `src/grades/dto/grade.dto.ts`
+
+Suggested fix:
+Alinear el máximo del DTO con 5.0, manteniendo mínimo 0 y máximo dos decimales.
+
+Validation after fix:
+Mediante `node -r ts-node/register`, ValidationPipe real con UpsertGradeDto y BulkGradesDto: 0, 4.6 y 5 aceptados; -0.01, 5.01 y valores con más de dos decimales rechazados. No persistir notas reales.
+
+### BE-018
+
+Severity: medium
+
+Status: confirmed
+
+Symptom:
+Un estudiante autenticado obtiene 403 en GET `/api/v1/enrollments/mine`. La ruta permite docentes, pero su servicio busca un perfil Student, por lo que un docente sin ese perfil no puede obtener «sus matrículas» mediante ese handler.
+
+Root cause:
+`EnrollmentsController.mine()` está restringido a `Role.Docente` aunque invoca `EnrollmentsService.findMine()`, que resuelve el estudiante por su usuario y filtra sus matrículas. La metadata incorrecta es independiente del registro del guard.
+
+Evidence:
+- `src/enrollments/enrollments.controller.ts:32-38`: Get('mine') con Roles(Docente).
+- `src/enrollments/enrollments.service.ts:134-137`: findByUserId del StudentsService y filtro forcedStudent.
+- `src/auth/auth.module.ts:33-34`: árbol local registra JwtAuthGuard y RolesGuard.
+- Diagnóstico: RolesGuard real con Reflector y handler real mine; Estudiante → ForbiddenException/403, Docente → permitido. No se usó una ruta dinámica ni se depende de BE-006.
+
+Files involved:
+- `src/enrollments/enrollments.controller.ts`
+- `src/enrollments/enrollments.service.ts`
+
+Suggested fix:
+Autorizar el rol Estudiante para este contrato de perfil propio. Si se necesita un listado docente, definirlo con autorización y consulta docente apropiadas, no reutilizar findMine basado en Student.
+
+Validation after fix:
+Prueba aislada de metadata/guard con `node -r ts-node/register`: Estudiante autorizado en mine, Docente rechazado si la ruta sigue siendo solo estudiantil. Mock de StudentsService con ID propio; el filtro de listado debe ignorar cualquier query.student ajeno y conservar el estudiante autenticado.
+
+### BE-019
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+PATCH `/api/v1/periods/:id` con `{ "status": "planificado" }` devuelve un periodo abierto al estado planificado, incluso si ya comenzó a recibir matrículas. Deja de ser el periodo actual y puede habilitar la apertura de otro periodo sin cerrar el anterior por el flujo obligatorio.
+
+Root cause:
+`PeriodsService.update()` documenta el ciclo Planned → Open → Closed, pero solo bloquea cambios desde Closed y solicitudes de Closed. No impide la transición inversa Open → Planned; después ejecuta set/save.
+
+Evidence:
+- `src/periods/periods.service.ts:61-78`: comprobaciones incompletas de transiciones.
+- `src/periods/periods.service.ts:41-45`: findCurrent solo encuentra estado Open.
+- `src/periods/dto/period.dto.ts:23-27`: Planned es un valor admitido por el DTO.
+- Diagnóstico inline con periodo Open y fechas válidas: update(id, {status: Planned}) resolvió con estado Planned y save=1; no necesitó consultar matrículas ni cerrar el periodo.
+
+Files involved:
+- `src/periods/periods.service.ts`
+
+Suggested fix:
+Aplicar explícitamente las transiciones permitidas, rechazando Open → Planned. Conservar cierre exclusivamente por close, prohibición de reapertura y unicidad del periodo abierto.
+
+Validation after fix:
+Prueba aislada con `node -r ts-node/register`: Open → Planned devuelve 400 sin set/save; Planned → Open pasa si no hay otro abierto; Closed → Open y cierre por PATCH rechazan; edición sin cambio de estado conserva comportamiento permitido.
+
+### BE-020
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+Se puede reactivar un grupo cuyo docente o salón ya está ocupado en el mismo horario por otro grupo activo. La API termina con dos grupos activos incompatibles aunque sus reglas prohíben esos cruces.
+
+Root cause:
+`GroupsService.update()` llama a assertNoConflicts solo si dto.teacher o dto.schedule están presentes. PATCH con únicamente `{ "active": true }` omite esa comprobación; un grupo desactivado no había ocupado recursos al crear/asignar otros grupos.
+
+Evidence:
+- `src/groups/groups.service.ts:123-135`: condición limitada a cambios de teacher/schedule, seguida de persistencia.
+- `src/groups/groups.service.ts:179-205`: conflicto de docente/salón entre grupos activos.
+- `src/groups/dto/group.dto.ts:68-72`: active está permitido en actualización.
+- Diagnóstico inline: grupo inactivo y otro con mismo docente y lunes 08:00–10:00; update({active:true}) lo activó con consultas de conflictos=0. Ejecutar assertNoConflicts con ese mismo horario produjo 409.
+
+Files involved:
+- `src/groups/groups.service.ts`
+
+Suggested fix:
+Validar conflictos al pasar de inactivo a activo, usando docente/horario resultantes y excluyendo el propio grupo. Revalidar también los recursos activos que sean exigidos para habilitar un grupo; no exigir campos redundantes al cliente para activar el check.
+
+Validation after fix:
+Prueba aislada con `node -r ts-node/register`: reactivación con choque de docente o salón → 409 y sin save; sin choque → activa el grupo; desactivación no se bloquea por choque. Comprobar que la consulta excluya el ID propio.
+
+### BE-021
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+Un JWT emitido antes de un cambio/restablecimiento de contraseña, pero dentro del mismo segundo, sigue autenticando después de persistir passwordChangedAt. La promesa de cerrar las sesiones anteriores no se cumple en esa ventana.
+
+Root cause:
+`JwtStrategy.validate()` compara iat en segundos con `Math.floor(passwordChangedAt.getTime() / 1000)` y usa `<`. Al truncar, un token anterior dentro del mismo segundo queda igual al umbral y se acepta. JWT iat no conserva milisegundos, por lo que el sistema carece de información para distinguir esos tokens de uno posterior dentro del mismo segundo.
+
+Evidence:
+- `src/auth/strategies/jwt.strategy.ts:13,35-39`: precisión de iat y comparación truncada.
+- `src/users/users.service.ts:138-148`: resetPassword/setPassword sí guarda timestamp y promete invalidar sesiones.
+- Diagnóstico: timestamp ya persistido sintético `2026-01-01T00:00:00.900Z`; iat correspondiente al inicio de ese segundo fue aceptado. iat del segundo anterior recibió 401. No se ejecutó changePassword ni se depende de BE-004.
+
+Files involved:
+- `src/auth/strategies/jwt.strategy.ts`
+- `src/users/users.service.ts`
+- `src/auth/auth.service.ts` (emisión del token posterior al cambio)
+
+Suggested fix:
+Usar una versión de sesión/contraseña o una estrategia temporal coherente que distinga inequívocamente tokens anteriores de los posteriores. No sustituir simplemente `<` por `<=` sin resolver la aceptación del nuevo JWT emitido en el mismo segundo.
+
+Validation after fix:
+Prueba aislada con `node -r ts-node/register` y reloj/timestamps sintéticos: token emitido a .100 y cambio persistido a .900 del mismo segundo → 401; token nuevo posterior al cambio → aceptado; token del segundo anterior → 401. Cubrir tanto resetPassword como cambio propio sin acceder a secretos ni DB.
+
+### BE-022
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+PATCH `/api/v1/groups/:id` con `{ "schedule": null }` acepta un grupo sin arreglo de horario. Consultas/operaciones posteriores que recorren ese horario pueden fallar con TypeError/500, incluidas las comprobaciones de cruces con otros grupos.
+
+Root cause:
+`UpdateGroupDto` deriva de PartialType, cuya opcionalidad omite la validación de null. `GroupsService.update()` comprueba dto.schedule por truthiness, por lo que no valida null, pero después lo aplica con group.set(dto). El contrato del modelo permite ese valor y los consumidores asumen siempre un arreglo.
+
+Evidence:
+- `src/groups/dto/group.dto.ts:59-68`: validación de arreglo heredada mediante PartialType.
+- `src/groups/groups.service.ts:124-135`: null omite assertValidSchedule/assertNoConflicts pero llega a set/save.
+- `src/groups/groups.service.ts:196-199`: for-of sobre other.schedule sin manejo de null.
+- `src/groups/schemas/group.schema.ts:58-59`: contrato mínimo del documento usado para validación offline, no auditoría de schema.
+- Diagnóstico: ValidationPipe real aceptó schedule=null; update lo aplicó a un documento Mongoose desconectado, cuya validate() pasó y cuyo save simulado se llamó 1 vez. assertNoConflicts con ese documento entre los otros grupos lanzó TypeError.
+
+Files involved:
+- `src/groups/dto/group.dto.ts`
+- `src/groups/groups.service.ts`
+- `src/groups/schemas/group.schema.ts` (contrato usado por el servicio)
+
+Suggested fix:
+Distinguir campo omitido de null en PATCH y rechazar null para schedule, conservando validaciones de arreglo no vacío y franjas. Añadir defensa del contrato en el servicio/persistencia si corresponde; no convertir silenciosamente null en un horario válido.
+
+Validation after fix:
+Prueba offline con `node -r ts-node/register`: ValidationPipe rechaza schedule=null y [] con 400; omitir schedule permite editar otros campos sin alterar el horario; arreglo válido pasa; no se llama set/save cuando el horario es inválido. Probar conflictos con horarios válidos sin TypeError.
+
+### BE-023
+
+Severity: high
+
+Status: confirmed
+
+Symptom:
+Un administrador puede eludir la prohibición de desactivar, cambiar de rol o eliminar su propia cuenta enviando su mismo ObjectId en mayúsculas. La desactivación requiere que otro administrador activo pase el check independiente; la eliminación puede alcanzar también al único administrador si no tiene perfiles dependientes.
+
+Root cause:
+Las protecciones de identidad propia en `UsersService.update()` y `DeletionsService.removeUser()` comparan `id === actor.id` como texto sin normalizar. ParseObjectIdPipe admite hexadecimal sin distinción de mayúsculas y lo devuelve intacto, mientras Mongoose resuelve ambas representaciones al mismo documento. Las dos protecciones comparten el mismo defecto de comparación de identidad.
+
+Evidence:
+- `src/common/pipes/parse-object-id.pipe.ts:5-9`: regex con flag i, retorno del valor original.
+- `src/users/users.service.ts:87-110`: protección propia por igualdad textual y check separado de otro admin.
+- `src/deletions/deletions.service.ts:155-164`: comparación textual antes de borrar.
+- `src/users/users.controller.ts:55-58` y `src/deletions/deletions.controller.ts:92-96`: el ID de URL atraviesa ese pipe antes de ambos servicios.
+- Diagnóstico con IDs sintéticos: pipe aceptó versión mayúscula y Types.ObjectId(...).toHexString() confirmó el mismo ID canónico. update permitió active=false y save=1 con otro admin disponible; removeUser alcanzó deleteOne=1 en mocks. Los mismos métodos con ID minúsculo rechazaron respectivamente con 400 y 409.
+
+Files involved:
+- `src/common/pipes/parse-object-id.pipe.ts`
+- `src/users/users.service.ts`
+- `src/deletions/deletions.service.ts`
+- `src/users/users.controller.ts`
+- `src/deletions/deletions.controller.ts`
+
+Suggested fix:
+Comparar identidad canónica de ObjectId o usar el ID canónico del documento cargado, sin depender de la representación textual enviada por el cliente. Cubrir ambos servicios y conservar las protecciones de último administrador y perfiles.
+
+Validation after fix:
+Pruebas aisladas con `node -r ts-node/register`, pipe y servicios reales, modelos simulados: ID propio en minúsculas, mayúsculas y mezcla → rechaza desactivación/cambio de rol/eliminación sin save/delete. Edición o eliminación permitida de otro usuario mantiene comportamiento y checks de dependencias. No borrar cuentas reales.
+
+## Previous entries not revalidated
+
+Las siguientes 13 entradas y notas son el reporte anterior, preservado íntegramente. No se investigó nuevamente su resolución ni se incluyen en los 10 hallazgos actuales. Los números, prioridades y afirmaciones de corrección dentro del bloque son históricos.
+
+<details>
+<summary>Reporte anterior: BE-001 a BE-013</summary>
+
+# Bug Report
+
+## Summary
+
+Area: backend
 Total detected: 13
 Confirmed: 13
 Probable: 0
@@ -416,3 +747,5 @@ Aplicado: agregar `/v1` solo a los destinos HTTP hacia NestJS. Conservar el pref
 
 Validation after fix:
 Desde backend, diagnóstico inline `node` con TypeScript instalado, VM y mocks de Next/fetch: ejecutar POST de login, GET de proxy con params/search y apiGet; verificar los tres destinos exactos indicados. No instalar dependencias para este diagnóstico. El build/typecheck frontend integral queda pendiente por dependencias ausentes; BE-007 sigue siendo independiente para el recurso evaluations.
+
+</details>

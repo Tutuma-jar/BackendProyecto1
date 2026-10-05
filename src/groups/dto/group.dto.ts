@@ -11,6 +11,7 @@ import {
   Matches,
   Max,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { PaginationQueryDto } from '../../common/dto/pagination-query.dto';
@@ -65,7 +66,15 @@ export class CreateGroupDto {
 }
 
 // La materia y el periodo no se pueden cambiar una vez creado el grupo
-export class UpdateGroupDto extends PartialType(OmitType(CreateGroupDto, ['subject', 'period'] as const)) {
+export class UpdateGroupDto extends PartialType(OmitType(CreateGroupDto, ['subject', 'period', 'schedule'] as const)) {
+  @ApiPropertyOptional({ type: [ScheduleSlotDto] })
+  @ValidateIf((_object, value: unknown) => value !== undefined)
+  @IsArray()
+  @ArrayMinSize(1)
+  @ValidateNested({ each: true })
+  @Type(() => ScheduleSlotDto)
+  schedule?: ScheduleSlotDto[];
+
   @ApiPropertyOptional()
   @IsOptional()
   @IsBoolean()
