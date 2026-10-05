@@ -44,6 +44,23 @@ async function validateSnapshots(snapshots) {
   // No evaluar relaciones sobre documentos que ya fallaron el schema.
   if (errors.length) throw new Error(`Preflight rechazado:\n${errors.join('\n')}`);
 
+  for (const [collection, docs] of Object.entries(data)) {
+    const uniqueIndexes = [[{ _id: 1 }, { unique: true }], ...schemas[collection].indexes()]
+      .filter(([, options]) => options.unique);
+    for (const [fields] of uniqueIndexes) {
+      const keys = Object.keys(fields), seen = new Map();
+      docs.forEach((doc, index) => {
+        const key = JSON.stringify(keys.map(field => doc[field] ?? null));
+        if (seen.has(key)) {
+          fail(collection, index, keys.join('+'), `clave unica duplicada con documento ${seen.get(key) + 1}`);
+        } else {
+          seen.set(key, index);
+        }
+      });
+    }
+  }
+  if (errors.length) throw new Error(`Preflight rechazado:\n${errors.join('\n')}`);
+
   const byName = Object.fromEntries(Object.entries(NAMES).map(([collection, name]) => [name, collection]));
   const maps = Object.fromEntries(Object.entries(data).map(([collection, docs]) =>
     [collection, new Map(docs.map(doc => [String(doc._id), doc]))]));

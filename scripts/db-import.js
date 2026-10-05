@@ -1,5 +1,6 @@
 // Importa los archivos de database/*.json a la base indicada en MONGODB_URI
 // Uso: npm run db:import          (reemplaza el contenido de cada coleccion)
+// Requiere MongoDB con transacciones (replica set o cluster sharded).
 const { MongoClient } = require('mongodb');
 const { EJSON } = require('bson');
 const fs = require('fs');
@@ -24,15 +25,26 @@ async function importDatabase(inDir = IN_DIR) {
 
   require('dotenv').config();
   const client = await MongoClient.connect(process.env.MONGODB_URI);
-  const db = client.db();
-
-  for (const [name, docs] of Object.entries(validated)) {
-    await db.collection(name).deleteMany({});
-    if (docs.length > 0) await db.collection(name).insertMany(docs);
-    console.log(name.padEnd(12), docs.length, 'documentos importados');
+  try {
+    const db = client.db();
+    const session = client.startSession();
+    try {
+      await session.withTransaction(async () => {
+        for (const [name, docs] of Object.entries(validated)) {
+          await db.collection(name).deleteMany({}, { session });
+          if (docs.length > 0) await db.collection(name).insertMany(docs, { session });
+        }
+      });
+    } finally {
+      await session.endSession();
+    }
+    for (const [name, docs] of Object.entries(validated)) {
+      console.log(name.padEnd(12), docs.length, 'documentos importados');
+    }
+    console.log('Importacion terminada en la base:', db.databaseName);
+  } finally {
+    await client.close();
   }
-  await client.close();
-  console.log('Importacion terminada en la base:', db.databaseName);
 }
 
 module.exports = { importDatabase };
